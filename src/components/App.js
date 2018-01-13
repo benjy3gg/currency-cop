@@ -453,6 +453,21 @@ function GetUniqueMapOverview (league, date) {
   })
 }
 
+function GetGemOverview (league, date) {
+  return DoServerRequest({
+    method: 'get',
+    url: Constants.NINJA_GEM_OVERVIEW_URL,
+    options: {
+      params: {
+        league,
+        date
+      }
+    },
+    onSuccess: 'GEM_RESPONSE',
+    onError: 'GEM_ERROR'
+  })
+}
+
 function GetUniqueJewelOverview (league, date) {
   return DoServerRequest({
     method: 'get',
@@ -587,7 +602,13 @@ class ReportBuilder {
     item.chaosValue = data.lineItem.chaosEquivalent || data.lineItem.chaosValue
     item.orderId = data.details.poeTradeId || data.lineItem.id
     item.type = data.type
-
+    if(item.type === "gem") {
+      item.gemLevel = data.lineItem.gemLevel
+      item.gemQuality = data.lineItem.gemQuality
+      item.corrupted = data.lineItem.corrupted
+      item.variant = data.lineItem.variant
+    }
+    
     if (data.lineItem.stackSize) {
       item.maxStackSize = data.lineItem.stackSize
     }
@@ -765,6 +786,7 @@ class ReportBuilder {
       .then(() => this.fetchMapRates())
       .then(() => this.fetchUniqueMapRates())
       .then(() => this.fetchUniqueJewelRates())
+      .then(() => this.fetchGemRates())
       .then(() => this.fetchUniqueFlaskRates())
       .then(() => this.fetchUniqueWeaponRates())
       .then(() => this.fetchUniqueArmourRates())
@@ -829,6 +851,22 @@ class ReportBuilder {
             return response.status !== 200
               ? this.fetchUniqueMapRates(queue)
               : this.processFetchedRates('map_unique', response.data)
+          })
+          .then(resolve)
+          .catch(reject)
+      }))
+  }
+
+  fetchGemRates (queue) {
+    let league = this.settings.league.replace('SSF ', '')
+
+    return (queue || new Queue(1))
+      .unshift(() => new Promise((resolve, reject) => {
+        return GetGemOverview(league, getNinjaDate())
+          .then(response => {
+            return response.status !== 200
+              ? this.fetchGemRates(queue)
+              : this.processFetchedRates('gem', response.data)
           })
           .then(resolve)
           .catch(reject)
@@ -951,15 +989,6 @@ class ReportBuilder {
     return new Promise((resolve, reject) => {
       let rates = this.data.rates || []
 
-      let rateExists = (itemName, links) => {
-        let litemName = itemName.toLowerCase()
-        return rates.find(value => value.lname === litemName && value.links === links)
-      }
-
-      let getCurrencyDetailsItem = (itemName) => {
-        return data.currencyDetails.find(value => value.name === itemName)
-      }
-
       let getLineItemName = (lineItem) => {
         return data.currencyDetails
           ? lineItem.currencyTypeName
@@ -970,9 +999,30 @@ class ReportBuilder {
         return lineItem.links || 0
       }
 
+      let getLineItemQuality = (lineItem) => {
+        return lineItem.quality || 0
+      }
+
+      let rateExists = (type, item) => {
+        let litemName = getLineItemName(item).toLowerCase()
+        let gemLevel = item.gemLevel
+        let gemQuality = item.gemQuality
+        if(type == "gem") {
+          return rates.find(value => {
+            value.lname === litemName && value.gemLevel == gemLevel && value.gemQuality == gemQuality
+          })
+        }
+        let links = getLineItemLinks(item)
+        return rates.find(value => value.lname === litemName && value.links === links)
+      }
+
+      let getCurrencyDetailsItem = (itemName) => {
+        return data.currencyDetails.find(value => value.name === itemName)
+      }
+
       if (data.lines && data.lines.forEach) {
         data.lines.forEach(lineItem => {
-          let exists = rateExists(getLineItemName(lineItem), getLineItemLinks(lineItem))
+          let exists = rateExists(type, lineItem)
 
           // Entry already exists
           if (exists) {
@@ -1008,6 +1058,55 @@ class ReportBuilder {
         return value.lname === litemName && value.links === links
       })
     }
+
+    let getGemProperties = (item) => {
+      let quality = item.properties.find(property => property.name === "Quality")
+      if (quality) {
+        quality = parseInt(quality.values[0][0])
+      } else {
+        quality = 0
+      } 
+
+      let level = item.properties.find(property => property.name === "Level")
+      if (level) {
+        level = parseInt(level.values[0][0])
+      } else {
+        level = 1;
+      } 
+
+      // ninja only returns quality = 20 or 0 so we adjust the actual value to get approximate worth
+      if(quality >= 16) {
+        quality = 20
+      } else {
+        quality = 0
+      }
+
+      // ninja only return level = 0, 20, 21 so we set level 19 to level 20 and all other we set to 0
+      // maybe make the check check for level 18 because it is nearly 20?
+      if(level === 19) {
+        level = 20
+      } else if (level < 19) {
+        level = 1
+      }
+
+      item.typeLine = `${item.typeLine} - ${level} - ${quality}%`
+
+      return [level, quality, item];
+    }
+
+    // Helpers
+    let getGemObject = (item) => {
+      let gemName = item.typeLine.toLowerCase()
+      let gemQuality
+      let gemLevel
+      let gemCorrupted = item.corrupted || false;
+      [gemLevel, gemQuality, item] = getGemProperties(item)
+      return items.find(value => {
+        return value.lname === gemName && value.gemLevel === gemLevel && value.gemQuality === gemQuality && value.corrupted === gemCorrupted
+      })
+    }
+
+    //TODO: add check for gem level and quality here
 
     let getItemLinks = (item) => 
     {
@@ -1049,12 +1148,22 @@ class ReportBuilder {
 
         if (tab && tab.items && tab.items.forEach) {
           tab.items.forEach(item => {
-            let reportItem = getItemObject(item.typeLine, 0)
+            let reportItem
 
+            if(!reportItem && item.category === "gems") {
+              reportItem = getGemObject(item)
+            }
+            
+            if(!reportItem) {
+              reportItem = getItemObject(item.typeLine, 0)
+            }
+          
             // Check for "Superior" in item name
             if (!reportItem && item.typeLine.indexOf('Superior') > -1) {
               reportItem = getItemObject(item.typeLine.replace('Superior ', ''), 0)
             }
+
+            
 
             // Chaos orb doesn't exist by default so we must create them.
             if (!reportItem && item.typeLine === 'Chaos Orb') {
