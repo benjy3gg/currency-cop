@@ -2205,6 +2205,7 @@ class ReportScreen extends React.Component {
                   <img 
                     src={item.icon}
                     width={32}
+<<<<<<< HEAD
                     style={{ 
 						verticalAlign: 'middle',
 						objectFit: 'contain',
@@ -2212,6 +2213,10 @@ class ReportScreen extends React.Component {
 					    height: '32px'
 					}}
                     title={item.name}
+=======
+                    style={{ verticalAlign: 'middle' }}
+                    title={item.type === "gem" ? `${item.name} (${item.gemLevel}/${item.gemQuality}% ${item.corrupted ? 'corrupted' : ''})` : item.name}
+>>>>>>> gem-worth
                   />
                   ⨯ {item.stackSize || 0}
                 </Typography>
